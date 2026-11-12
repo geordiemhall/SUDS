@@ -42,6 +42,7 @@ public:
 	virtual void RegisterCommands() override
 	{
 		UI_COMMAND(StartDialogue, "Start Dialogue", "Start/restart dialogue", EUserInterfaceActionType::Button, FInputChord());
+		UI_COMMAND(EditScript, "Edit Script", "Edit the script in VSCode", EUserInterfaceActionType::Button, FInputChord());
 		UI_COMMAND(WriteBackTextIDs, "Write String Keys", "Write string keys back to script source to stabilise for localisation / voice asset links", EUserInterfaceActionType::Button, FInputChord());
 		UI_COMMAND(GenerateVOAssets, "Generate Voice Assets", "Generate DialogueVoice and DialogueWave assets for VO", EUserInterfaceActionType::Button, FInputChord());
 	}
@@ -49,6 +50,7 @@ public:
 public:
 
 	TSharedPtr<FUICommandInfo> StartDialogue;
+	TSharedPtr<FUICommandInfo> EditScript;
 	TSharedPtr<FUICommandInfo> WriteBackTextIDs;
 	TSharedPtr<FUICommandInfo> GenerateVOAssets;
 };
@@ -250,7 +252,7 @@ class FSUDSEditorToolkit : public FAssetEditorToolkit
 {
 public:
 	void InitEditor(const TArray<UObject*>& InObjects);
-
+	
 	virtual void RegisterTabSpawners(const TSharedRef<FTabManager>& InTabManager) override;
 	virtual void UnregisterTabSpawners(const TSharedRef<FTabManager>& InTabManager) override;
 
@@ -337,6 +339,7 @@ private:
 	void Clear();
 	void WriteBackTextIDs();
 	void GenerateVOAssets();
+	void OpenScriptInTextEditor();
 
 };
 

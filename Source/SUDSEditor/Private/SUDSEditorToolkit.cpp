@@ -2,9 +2,16 @@
 // Released under the MIT license https://opensource.org/license/MIT/
 #include "SUDSEditorToolkit.h"
 
+#include "EditorFramework/AssetImportData.h"
 #include "EditorReimportHandler.h"
+#include "Features/IModularFeatures.h"
+#include "Framework/Text/SlateTextRun.h"
 #include "IDetailRootObjectCustomization.h"
 #include "IDocumentation.h"
+#include "ISourceCodeAccessModule.h"
+#include "ISourceCodeAccessor.h"
+#include "Misc/MessageDialog.h"
+#include "PropertyEditorModule.h"
 #include "SUDSDialogue.h"
 #include "SUDSEditorScriptTools.h"
 #include "SUDSEditorVoiceOverTools.h"
@@ -13,8 +20,7 @@
 #include "SUDSScript.h"
 #include "SUDSScriptNodeText.h"
 #include "SUDSSubsystem.h"
-#include "Framework/Text/SlateTextRun.h"
-#include "Misc/MessageDialog.h"
+#include "Toolkits/AssetEditorToolkit.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
@@ -24,8 +30,6 @@
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/SToolTip.h"
 #include "Widgets/Views/SListView.h"
-#include "Toolkits/AssetEditorToolkit.h"
-#include "PropertyEditorModule.h"
 
 const FName NAME_SpeakerLine("SpeakerLine");
 const FName NAME_Choice("Choice");
@@ -332,6 +336,9 @@ void FSUDSEditorToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& InTa
 	GetToolkitCommands()->MapAction(FSUDSToolbarCommands::Get().StartDialogue,
 		FExecuteAction::CreateSP(this, &FSUDSEditorToolkit::StartDialogue),
 		FCanExecuteAction());
+	GetToolkitCommands()->MapAction(FSUDSToolbarCommands::Get().EditScript,
+		FExecuteAction::CreateSP(this, &FSUDSEditorToolkit::OpenScriptInTextEditor),
+		FCanExecuteAction());
 	GetToolkitCommands()->MapAction(FSUDSToolbarCommands::Get().WriteBackTextIDs,
 		FExecuteAction::CreateSP(this, &FSUDSEditorToolkit::WriteBackTextIDs),
 		FCanExecuteAction());
@@ -361,17 +368,19 @@ void FSUDSEditorToolkit::ExtendToolbar(FToolBarBuilder& ToolbarBuilder, TWeakPtr
 	{
 		return;
 	}
+	
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION > 0
+	const FName StyleSetName = FAppStyle::GetAppStyleSetName();
+#else
+	const FName StyleSetName = FEditorStyle::GetStyleSetName();
+#endif
 
 	ToolbarBuilder.BeginSection("CachedState");
 	{
 		ToolbarBuilder.AddToolBarButton(FSUDSToolbarCommands::Get().StartDialogue,
 			NAME_None, TAttribute<FText>(), TAttribute<FText>(),
 			FSlateIcon(
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION > 0
-				FAppStyle::GetAppStyleSetName(),
-#else
-				FEditorStyle::GetStyleSetName(),
-#endif
+				StyleSetName,
 				TEXT("Icons.Toolbar.Play")));
 
 		TSharedRef<SWidget> LabelSelectionBox = SNew(SComboButton)
@@ -379,7 +388,7 @@ void FSUDSEditorToolkit::ExtendToolbar(FToolBarBuilder& ToolbarBuilder, TWeakPtr
 			.ButtonContent()
 			[
 				SNew(STextBlock)
-				.ToolTipText( INVTEXT("Choose where to start dialogue from") )
+				.ToolTipText(INVTEXT("Choose where to start dialogue from") )
 				.Text(this, &FSUDSEditorToolkit::GetSelectedStartLabel )
 			];
 
@@ -389,9 +398,8 @@ void FSUDSEditorToolkit::ExtendToolbar(FToolBarBuilder& ToolbarBuilder, TWeakPtr
 			.Text(FText::FromString(TEXT("Reset Variables:")))
 			.Margin(FMargin(10, 7, 10, 5)));
 		TSharedPtr<SToolTip> ResetTooltip = IDocumentation::Get()->CreateToolTip(
-			FText::FromString(TEXT(
-				"Whether to reset variable state created  by the script (note: vars manually created in this editor are never reset, delete them yourself)")),
-			NULL,
+			INVTEXT("Whether to reset variable state created  by the script (note: vars manually created in this editor are never reset, delete them yourself)"),
+			nullptr,
 			"",
 			TEXT("ResetVars"));
 		TSharedRef<SWidget> ResetVarsCheckbox = SNew(SCheckBox)
@@ -407,25 +415,17 @@ void FSUDSEditorToolkit::ExtendToolbar(FToolBarBuilder& ToolbarBuilder, TWeakPtr
 
 	ToolbarBuilder.BeginSection("CachedState");
 	{
+		ToolbarBuilder.AddToolBarButton(FSUDSToolbarCommands::Get().EditScript,
+			NAME_None, TAttribute<FText>(), TAttribute<FText>(),
+			FSlateIcon(StyleSetName, TEXT("Icons.Toolbar.Details")));
+		
 		ToolbarBuilder.AddToolBarButton(FSUDSToolbarCommands::Get().WriteBackTextIDs,
 			NAME_None, TAttribute<FText>(), TAttribute<FText>(),
-			FSlateIcon(
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION > 0
-				FAppStyle::GetAppStyleSetName(),
-#else
-				FEditorStyle::GetStyleSetName(),
-#endif
-				TEXT("Icons.Toolbar.Details")));
+			FSlateIcon(StyleSetName, TEXT("Icons.Toolbar.Details")));
 
 		ToolbarBuilder.AddToolBarButton(FSUDSToolbarCommands::Get().GenerateVOAssets,
 			NAME_None, TAttribute<FText>(), TAttribute<FText>(),
-			FSlateIcon(
-#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION > 0
-				FAppStyle::GetAppStyleSetName(),
-#else
-				FEditorStyle::GetStyleSetName(),
-#endif
-				TEXT("Icons.Toolbar.Export")));
+			FSlateIcon(StyleSetName, TEXT("Icons.Toolbar.Export")));
 		
 	}
 	ToolbarBuilder.EndSection();
@@ -1197,6 +1197,57 @@ void FSUDSEditorToolkit::GenerateVOAssets()
 		FSUDSEditorVoiceOverTools::GenerateAssets(Script, Flags, &Logger);
 	}
 	
+}
+
+void FSUDSEditorToolkit::OpenScriptInTextEditor()
+{
+	// Get the file path to the script file we imported from
+	FString ScriptFilePath = Script->AssetImportData->GetFirstFilename();
+	if (ScriptFilePath.IsEmpty())
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, INVTEXT("Cannot edit script, no source file path found."));
+		return;
+	}
+	
+	// Check if it exists on disk
+	ScriptFilePath = FPaths::ConvertRelativePathToFull(ScriptFilePath);
+	if (!FPaths::FileExists(ScriptFilePath))
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, FText::Format(INVTEXT("Cannot edit script, source file not found on disk: {0}"), FText::FromString(ScriptFilePath)));
+		return;
+	}
+	
+	ISourceCodeAccessor* VisualStudioCodeAccessor = nullptr;
+	
+	// Try to find the VSCode module without a hard ref
+	const int32 FeatureCount = IModularFeatures::Get().GetModularFeatureImplementationCount("SourceCodeAccessor");
+	for(int32 FeatureIndex = 0; FeatureIndex < FeatureCount; FeatureIndex++)
+	{
+		IModularFeature* Feature = IModularFeatures::Get().GetModularFeatureImplementation("SourceCodeAccessor", FeatureIndex);
+		check(Feature);
+
+		ISourceCodeAccessor& Accessor = *static_cast<ISourceCodeAccessor*>(Feature);
+		if (Accessor.GetFName() == FName("VisualStudioCode"))
+		{
+			VisualStudioCodeAccessor = &Accessor;
+			break;
+		}
+	}
+	
+	// Note: If we try to open it via the source code accessor, Unreal forces the passing of the solution argument,
+	// which then opens the .code-workspace file instead of the script. So let's just assume you have VSCode set as the default
+	// app for .sud files, and open it directly. And just use the accessor to check that there's _a_ VSCode installation.
+	if (VisualStudioCodeAccessor && VisualStudioCodeAccessor->CanAccessSourceCode())
+	{
+		FPlatformProcess::LaunchFileInDefaultExternalApplication(*ScriptFilePath);
+		return;
+	}
+	
+	const EAppReturnType::Type Result = FMessageDialog::Open(EAppMsgType::YesNo, INVTEXT("Visual Studio Code source code accessor found. Would you still like to open with your default code editor?"));
+	if (Result == EAppReturnType::Yes)
+	{
+		FPlatformProcess::LaunchFileInDefaultExternalApplication(*ScriptFilePath);
+	}
 }
 
 void SSUDSEditorVariableItem::Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTableView)

@@ -44,7 +44,8 @@ public class SUDSEditor : ModuleRules
 				"ToolMenus",
 				"MessageLog",
 				"UnrealEd",
-				"EditorStyle"
+				"EditorStyle", 
+				"SourceCodeAccess"
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);
